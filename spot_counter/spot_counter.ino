@@ -5,25 +5,32 @@ ISR(WDT_vect) { Sleepy::watchdogEvent(); }
 
 #define SERIAL  1   // set to 1 to also report readings on the serial port
 
-// This program does the following:
-// 1. Turn on a digital out to illuminate an IR LED.
-// 2. Read a value from a digital phototransistor
-// 3. Put that state onto an LED on a different port.
+#define PHOTOPIN    14 // AIO1 - Phototransistor input
+#define IRLEDPIN     4 // DIO1 - IR LED supply
+#define DEBUGOUTPIN  6 // DIO3 - DEBUG LED output
+#define VOLTREADPIN 15 // AIO2 - Voltage reading input
 
-#define PHOTOPIN   17   // AIO4
-#define IRLEDPIN   5  // DIO2
-#define DEBUGOUTPIN  6 // DIO3
+#define SAMPLINGINTERVAL 100 // Sample the dial every <SAMPLINGINTERVAL>ms. 
+                             // We can't detect dials turning faster than
+                             // 10 * <SAMPLINGINTERVAL>.
 
 int globalCount;
+int batteryReading;
 
 MilliTimer scanTimer, sendTimer;
 
+/**
+ * This is the struct that we will transmit over the wire.
+ */
 typedef struct {
  int count;
- byte lobat :1; 
+ int battery; 
 } Payload;
 Payload measurement;
 
+/**
+ * Little helper function to make sure the serial port is flushed before continuing on.
+ */
 static void serialFlush() {
   #if ARDUINO >= 100
       Serial.flush();
@@ -31,16 +38,62 @@ static void serialFlush() {
   delay(2); // make sure tx buf is empty before going back to sleep
 }
 
-void setup() {
-  // put your setup code here, to run once:
+int outputState;
+/**
+ * Sample the state of the phototransitor.
+ */
+bool sampleMeterState(int irledpin, int photopin) {
+  // Spin up the IR led.
+  digitalWrite(irledpin, true);    
+
+  // Read the value.
+  outputState = digitalRead(photopin);    
+
+  // Turn off the IR LED.
+  digitalWrite(irledpin, false);
+
+  return outputState;  
+}
+
+/**
+ * Send our report of what's going on.
+ */
+static void sendReport() {
+  // Wake up the radio.
+  rf12_sleep(RF12_WAKEUP);
+  rf12_sendNow(0, &measurement, sizeof measurement);
+  // Power down and wait for transmission to complete.
+  rf12_sendWait(2);
+  // Fully power down.
+  rf12_sleep(RF12_SLEEP);
   
+  // Opttionally log to serial.
+  #if SERIAL
+    Serial.print("GASMETER COUNTS:");
+    Serial.print((int) measurement.count);
+    Serial.print(' BATTERY:');
+    Serial.print((int) measurement.battery);
+    Serial.print(' VOLTAGE:');
+    Serial.print((float) measurement.battery / 1024 * 3.3 * 2);
+    Serial.print('v');
+    Serial.println();
+    serialFlush();
+  #endif
+}
+
+/**
+ * Setup out little program.
+ */
+void setup() {
   // Setup our pins.
   pinMode(DEBUGOUTPIN, OUTPUT);
   pinMode(IRLEDPIN, OUTPUT);
   pinMode(PHOTOPIN, INPUT);
+  pinMode(VOLTREADPIN, INPUT);
  
   // The count starts at 0.
   globalCount = 0;
+  batteryReading = 0;
   
   // turn the radio off in the most power-efficient manner
   Sleepy::loseSomeTime(32);
@@ -54,73 +107,42 @@ void setup() {
   #endif 
 }
 
-int outputState;
-bool sampleMeterState(int irledpin, int photopin) {
-  // Spin up the IR led.
-  digitalWrite(irledpin, true);    
-      
-  // Read the value.
-  outputState = digitalRead(photopin);    
-
-  // Turn off the IR LED.
-  digitalWrite(irledpin, false);
-
-  return outputState;  
-}
-
-static void sendReport() {
-  // Wake up the radio.
-  rf12_sleep(RF12_WAKEUP);
-  rf12_sendNow(0, &measurement, sizeof measurement);
-  // Power down and wait for transmission to complete.
-  rf12_sendWait(2);
-  // Fully power down.
-  rf12_sleep(RF12_SLEEP);
-  
-  // Opttionally log to serial.
-  #if SERIAL
-    Serial.print("METER ");
-    Serial.print((int) measurement.count);
-    Serial.print(' ');
-    Serial.print((int) measurement.lobat);
-    Serial.println();
-    serialFlush();
-  #endif
-}
-
-bool currentMeterState;
 byte state;
+/**
+ * Loop over and wait until something needs doing.
+ *
+ * We report the state of our counter every 60 seconds, or when a count is detected.
+ */
 void loop() {
-  
-  // put your main code here, to run repeatedly:
-  
   // Send the count every 60 seconds.
   if (sendTimer.poll(60000)) {
-    // Add the battery measurement.
-    measurement.lobat = rf12_lowbat();
+    // And we might as well grab the battery state too.
+    batteryReading = analogRead(VOLTREADPIN);
+    measurement.battery = batteryReading;
     sendReport();
   }
-  
-  // Scan for a pulse every 100ms
-  if (scanTimer.poll(100)) {
-    // track the last 8 pin states, scanned every 100 milliseconds
-    // if state is 0x01, then we saw 7 times 0 followed by a 1
+
+  // Scan for a pulse every <SAMPLINGINTERVAL>ms
+  if (scanTimer.poll(SAMPLINGINTERVAL)) {
+    // track the last 8 pin states, scanned every <SAMPLINGINTERVAL> milliseconds
+    // if state is 0x01, then we saw 7 times 0 followed by a 1.
     state <<= 1;
     state |= sampleMeterState(IRLEDPIN, PHOTOPIN);
     if (state == 0x01) {
       globalCount++;
       measurement.count = globalCount;
       sendReport();
-      // Sleep for about 250ms, the dials can't turn that quickly.
-      Sleepy::loseSomeTime(250);
+      // Sleep for about 2 * SAMPLINGINTERVAL, the dials can't turn that quickly.
+      Sleepy::loseSomeTime(2 * SAMPLINGINTERVAL);
     }
     else {
-      // Sleep for around 100ms.
-      Sleepy::loseSomeTime(100);
+      // We did a read, but it wasn't a new spot, so wait another <SAMPLINGINTERVAL>.
+      Sleepy::loseSomeTime(SAMPLINGINTERVAL);
     }
-    
   }
   else {
-    Sleepy::loseSomeTime(25);
+    // We need to wait a little longer for our <SAMPLINGINTERVAL> polling.
+    Sleepy::loseSomeTime(SAMPLINGINTERVAL / 4);
   } 
 }
+
