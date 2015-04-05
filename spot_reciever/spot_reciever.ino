@@ -49,6 +49,9 @@ bool sampleMeterState(int irledpin, int photopin) {
   // Read the value.
   outputState = digitalRead(photopin);    
 
+//  Serial.println((int) analogRead(photopin));
+//  serialFlush();
+
   // Turn off the IR LED.
   digitalWrite(irledpin, false);
 
@@ -86,19 +89,19 @@ static void sendReport() {
  */
 void setup() {
   // Setup our pins.
-  pinMode(DEBUGOUTPIN, OUTPUT);
-  pinMode(IRLEDPIN, OUTPUT);
-  pinMode(PHOTOPIN, INPUT);
-  pinMode(VOLTREADPIN, INPUT);
+  //pinMode(DEBUGOUTPIN, OUTPUT);
+  //pinMode(IRLEDPIN, OUTPUT);
+  //pinMode(PHOTOPIN, INPUT);
+  //pinMode(VOLTREADPIN, INPUT);
  
   // The count starts at 0.
-  globalCount = 0;
-  batteryReading = 0;
+  //globalCount = 0;
+  //batteryReading = 0;
   
   // turn the radio off in the most power-efficient manner
-  Sleepy::loseSomeTime(32);
-  rf12_initialize(17, RF12_868MHZ, 5);
-  rf12_sleep(RF12_SLEEP);
+  //Sleepy::loseSomeTime(32);
+  rf12_initialize(18, RF12_868MHZ, 5);
+  //rf12_sleep(RF12_SLEEP);
   
   #if SERIAL
     Serial.begin(57600);
@@ -106,8 +109,8 @@ void setup() {
     serialFlush();
   #endif 
   
-  batteryReading = analogRead(VOLTREADPIN);
-  measurement.battery = batteryReading;
+  //batteryReading = analogRead(VOLTREADPIN);
+  //measurement.battery = batteryReading;
 }
 
 byte state;
@@ -117,35 +120,20 @@ byte state;
  * We report the state of our counter every 60 seconds, or when a count is detected.
  */
 void loop() {
-  // Send the count every 60 seconds.
-  if (sendTimer.poll(60000)) {
-    // And we might as well grab the battery state too.
-    batteryReading = analogRead(VOLTREADPIN);
-    measurement.battery = batteryReading;
-    sendReport();
+  if (rf12_recvDone() && rf12_crc == 0 && rf12_len == sizeof (Payload)) {
+    measurement = *(Payload*) rf12_data;
+    #if SERIAL
+      Serial.print("GASMETER COUNTS:");
+      Serial.print((int) measurement.count);
+      Serial.print(" BATTERY:");
+      Serial.print((int) measurement.battery);
+      Serial.print(" VOLTAGE:");
+      Serial.print((float) measurement.battery / 1024 * 3.3 * 2);
+      Serial.print('v');
+      Serial.println();
+      serialFlush();
+    #endif
   }
-
-  // Scan for a pulse every <SAMPLINGINTERVAL>ms
-  if (scanTimer.poll(SAMPLINGINTERVAL)) {
-    // track the last 8 pin states, scanned every <SAMPLINGINTERVAL> milliseconds
-    // if state is 0x01, then we saw 7 times 0 followed by a 1.
-    state <<= 1;
-    state |= sampleMeterState(IRLEDPIN, PHOTOPIN);
-    if (state == 0x01) {
-      globalCount++;
-      measurement.count = globalCount;
-      sendReport();
-      // Sleep for about 2 * SAMPLINGINTERVAL, the dials can't turn that quickly.
-      Sleepy::loseSomeTime(2 * SAMPLINGINTERVAL);
-    }
-    else {
-      // We did a read, but it wasn't a new spot, so wait another <SAMPLINGINTERVAL>.
-      Sleepy::loseSomeTime(SAMPLINGINTERVAL);
-    }
-  }
-  else {
-    // We need to wait a little longer for our <SAMPLINGINTERVAL> polling.
-    Sleepy::loseSomeTime(SAMPLINGINTERVAL / 4);
-  } 
+  
 }
 
