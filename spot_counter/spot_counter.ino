@@ -7,7 +7,6 @@ ISR(WDT_vect) { Sleepy::watchdogEvent(); }
 
 #define PHOTOPIN    14 // AIO1 - Phototransistor input
 #define IRLEDPIN     4 // DIO1 - IR LED supply
-#define DEBUGOUTPIN  6 // DIO3 - DEBUG LED output
 #define VOLTREADPIN 15 // AIO2 - Voltage reading input
 
 #define SAMPLINGINTERVAL 100 // Sample the dial every <SAMPLINGINTERVAL>ms. 
@@ -49,6 +48,9 @@ bool sampleMeterState(int irledpin, int photopin) {
   // Read the value.
   outputState = digitalRead(photopin);    
 
+//  Serial.println((int) analogRead(photopin));
+//  serialFlush();
+
   // Turn off the IR LED.
   digitalWrite(irledpin, false);
 
@@ -86,7 +88,6 @@ static void sendReport() {
  */
 void setup() {
   // Setup our pins.
-  pinMode(DEBUGOUTPIN, OUTPUT);
   pinMode(IRLEDPIN, OUTPUT);
   pinMode(PHOTOPIN, INPUT);
   pinMode(VOLTREADPIN, INPUT);
